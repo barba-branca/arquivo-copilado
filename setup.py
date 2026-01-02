@@ -17,8 +17,8 @@ setup(
         "anthropic",
         "fastapi",
         "uvicorn",
-        "paddleocr",
-        "paddlepaddle",
+#        "paddleocr",
+#        "paddlepaddle",
         "together",
         "scikit-learn",
         "websockets",
@@ -52,5 +52,5 @@ setup(
         "Source": "https://github.com/simular-ai/Agent-S",
         "Bug Reports": "https://github.com/simular-ai/Agent-S/issues",
     },
-    python_requires=">=3.9, <=3.12",
+    python_requires=">=3.9, <3.14",
 )
