@@ -4,6 +4,15 @@ import webbrowser
 import subprocess
 import time
 import re
+import json
+import os
+import platform
+
+# Tenta importar psutil para status do sistema, senão usa mock
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 # Definição dos System Prompts
 SYSTEM_PROMPT_CAMILA = """
@@ -23,12 +32,33 @@ Se a tarefa envolver abrir algo, confirme que foi aberto.
 Se for código, diga que o código foi rodado.
 """
 
-# Histórico de conversas
-history_camila = [{'role': 'system', 'content': SYSTEM_PROMPT_CAMILA}]
-history_agent_s = [{'role': 'system', 'content': SYSTEM_PROMPT_AGENT_S}]
+# Arquivo de persistência
+HISTORY_FILE = "chat_history.json"
 
 # Nome do modelo a ser usado (certifique-se de ter baixado, ex: ollama pull llama3.2)
 MODEL_NAME = "llama3.2"
+
+def load_history():
+    """Carrega o histórico de conversas se existir."""
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Erro ao carregar histórico: {e}")
+    return [{'role': 'system', 'content': SYSTEM_PROMPT_CAMILA}]
+
+def save_history(history):
+    """Salva o histórico de conversas."""
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Erro ao salvar histórico: {e}")
+
+# Histórico de conversas
+history_camila = load_history()
+history_agent_s = [{'role': 'system', 'content': SYSTEM_PROMPT_AGENT_S}]
 
 def execute_command_locally(command_text):
     """
@@ -65,6 +95,27 @@ def execute_command_locally(command_text):
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {command_text}\n")
         return ": anotado na lista de tarefas."
 
+    if "status" in command_text and ("sistema" in command_text or "pc" in command_text):
+        info = f"Sistema: {platform.system()} {platform.release()}"
+        if psutil:
+            cpu = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory().percent
+            info += f" | CPU: {cpu}% | RAM: {mem}%"
+        else:
+            info += " | (Instale 'psutil' para ver CPU/RAM)"
+        return f": status verificado. {info}"
+
+    if "listar" in command_text and ("arquivos" in command_text or "pasta" in command_text):
+        try:
+            files = os.listdir('.')
+            # Limita a 10 arquivos para não poluir
+            files_str = ", ".join(files[:10])
+            if len(files) > 10:
+                files_str += f" e mais {len(files)-10} arquivos..."
+            return f": arquivos na pasta atual: {files_str}"
+        except Exception as e:
+            return f": erro ao listar arquivos: {e}"
+
     return None
 
 def chat_agent_s(command):
@@ -99,12 +150,15 @@ def chat_camila(user_input):
     content = response['message']['content']
 
     history_camila.append({'role': 'assistant', 'content': content})
+    save_history(history_camila)
     return content
 
 def main():
     print("--- Sistema Multi-Agente Iniciado (Camila & Agente S) ---")
     print(f"Usando modelo: {MODEL_NAME}")
     print("Fale com a Camila (Ctrl+C para sair)...")
+    if os.path.exists(HISTORY_FILE):
+        print("Histórico carregado.")
     print("-" * 50)
 
     while True:
@@ -112,6 +166,10 @@ def main():
             user_input = input("\nVocê: ")
             if not user_input:
                 continue
+
+            if user_input.lower() in ['sair', 'exit', 'tchau']:
+                print("Saindo...")
+                break
 
             # 1. Camila responde
             camila_response = chat_camila(user_input)
