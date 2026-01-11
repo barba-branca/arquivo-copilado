@@ -7,12 +7,76 @@ import re
 import json
 import os
 import platform
+import speech_recognition as sr
+import pyttsx3
 
 # Tenta importar psutil para status do sistema, senão usa mock
 try:
     import psutil
 except ImportError:
     psutil = None
+
+# Configuração de TTS (Text-to-Speech)
+try:
+    engine = pyttsx3.init()
+    # Tenta configurar voz em português
+    voices = engine.getProperty('voices')
+    voice_set = False
+    for voice in voices:
+        # Tenta achar voz feminina em português (ex: "Brazil", "Maria", "Helena")
+        if "brazil" in voice.name.lower() or "portuguese" in voice.name.lower() or "pt-br" in voice.id.lower():
+            engine.setProperty('voice', voice.id)
+            voice_set = True
+            break
+
+    # Ajuste de velocidade (opcional, Camila fala rápido?)
+    engine.setProperty('rate', 180)
+except Exception as e:
+    print(f"Aviso: Não foi possível inicializar o motor de fala (TTS): {e}")
+    engine = None
+
+def speak(text):
+    """Fala o texto usando pyttsx3."""
+    if engine:
+        try:
+            engine.say(text)
+            engine.runAndWait()
+        except Exception as e:
+            print(f"[Erro no TTS]: {e}")
+    else:
+        # Se não tiver TTS, apenas imprime (já impresso antes de chamar speak normalmente)
+        pass
+
+def listen_microphone():
+    """Ouve do microfone e retorna texto."""
+    r = sr.Recognizer()
+    try:
+        # Verifica se PyAudio está instalado indiretamente via sr.Microphone
+        with sr.Microphone() as source:
+            print("\n(Ouvindo...)")
+            r.adjust_for_ambient_noise(source)
+            audio = r.listen(source)
+            try:
+                text = r.recognize_google(audio, language='pt-BR')
+                print(f"Você disse: {text}")
+                return text
+            except sr.UnknownValueError:
+                print("(Não entendi, tente novamente...)")
+                return None
+            except sr.RequestError as e:
+                print(f"(Erro no serviço de reconhecimento: {e})")
+                return None
+    except (OSError, AttributeError) as e:
+        # OSError: No Default Input Device Available (sem mic)
+        # AttributeError: PyAudio not installed
+        # Evita spam se o erro for recorrente, mas avisa na primeira vez ou se mudar o erro
+        if not hasattr(listen_microphone, "mic_error_logged"):
+            print(f"\n[Aviso: Microfone não disponível ({e}). Usando modo texto.]")
+            listen_microphone.mic_error_logged = True
+        return input("Você: ")
+    except Exception as e:
+        print(f"\n[Erro ao acessar microfone: {e}. Usando modo texto.]")
+        return input("Você: ")
 
 # Definição dos System Prompts
 SYSTEM_PROMPT_CAMILA = """
@@ -133,12 +197,14 @@ def chat_agent_s(command):
     if real_execution_result:
         prompt_content += f"\n[Sistema: A ação foi executada com o seguinte status: {real_execution_result}]"
 
-    response = ollama.chat(model=MODEL_NAME, messages=[
-        {'role': 'system', 'content': SYSTEM_PROMPT_AGENT_S},
-        {'role': 'user', 'content': prompt_content}
-    ])
-
-    return response['message']['content']
+    try:
+        response = ollama.chat(model=MODEL_NAME, messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPT_AGENT_S},
+            {'role': 'user', 'content': prompt_content}
+        ])
+        return response['message']['content']
+    except Exception as e:
+        return f": erro ao comunicar com LLM local: {e}"
 
 def chat_camila(user_input):
     """
@@ -146,8 +212,11 @@ def chat_camila(user_input):
     """
     history_camila.append({'role': 'user', 'content': user_input})
 
-    response = ollama.chat(model=MODEL_NAME, messages=history_camila)
-    content = response['message']['content']
+    try:
+        response = ollama.chat(model=MODEL_NAME, messages=history_camila)
+        content = response['message']['content']
+    except Exception as e:
+        content = f"(Erro ao conectar com Ollama: {e})"
 
     history_camila.append({'role': 'assistant', 'content': content})
     save_history(history_camila)
@@ -161,14 +230,20 @@ def main():
         print("Histórico carregado.")
     print("-" * 50)
 
+    if engine is None:
+        print("[AVISO] TTS não inicializado. Verifique se eSpeak ou drivers de áudio estão instalados.")
+
     while True:
         try:
-            user_input = input("\nVocê: ")
+            # Substitui input() por listen_microphone()
+            user_input = listen_microphone()
+
             if not user_input:
                 continue
 
             if user_input.lower() in ['sair', 'exit', 'tchau']:
                 print("Saindo...")
+                speak("Tchauzinho!")
                 break
 
             # 1. Camila responde
@@ -177,10 +252,11 @@ def main():
             # Mostra resposta da Camila
             print(f"\nCamila: {camila_response}")
 
+            # Fala a resposta da Camila
+            speak(camila_response)
+
             # 2. Verifica se ela mandou algo pro Agente S
             # Procura por "S, " ou "S," no início de frases ou linhas
-            # Regex captura comandos que começam com "S," ou "S " (case insensitive)
-            # Ex: "S, abre isso" -> captura "abre isso"
             match = re.search(r'\bS,\s*(.*)', camila_response, re.IGNORECASE)
 
             if match:
@@ -191,14 +267,16 @@ def main():
                 s_response = chat_agent_s(command)
 
                 # Mostra resposta do Agente S
-                # O Agente S já deve incluir o prefixo ":" conforme o system prompt, mas garantimos aqui visualmente
                 print(f"\nAgente S {s_response}")
+                # Agente S não fala, ele é "frio" e técnico, apenas executa.
 
         except KeyboardInterrupt:
             print("\nSaindo...")
             break
         except Exception as e:
-            print(f"\nErro: {e}")
+            print(f"\nErro no loop principal: {e}")
+            # Evita loop infinito de erros
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
